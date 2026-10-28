@@ -1,9 +1,9 @@
 {
  "alertado": [],
  "falhas": {
-  "Enjoei": 1,
-  "Mercado Livre": 1,
-  "OLX": 1
+  "Enjoei": 2,
+  "Mercado Livre": 2,
+  "OLX": 2
  },
  "iniciados": [
   "Mercado Livre|camisa cruzeiro",
@@ -41,5 +41,6 @@
   "Enjoei|cruzeiro umbro",
   "Enjoei|cruzeiro adidas"
  ],
+ "iniciados_v2": [],
  "vistos": {}
 }
