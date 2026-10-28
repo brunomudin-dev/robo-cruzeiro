@@ -3,6 +3,8 @@ Robô de anúncios do Cruzeiro
 ----------------------------
 Procura anúncios novos na OLX, Mercado Livre e Enjoei e avisa no WhatsApp
 (via CallMeBot). Roda sozinho no GitHub Actions a cada 10 minutos.
+Só avisa de anúncio criado depois que o robô começou (compara o número do
+anúncio), para não avisar de anúncio antigo que reaparece na busca.
 
 Você NÃO precisa mexer neste arquivo. Para mudar os termos de busca,
 edite o arquivo "termos.txt".
@@ -188,18 +190,51 @@ def buscar_mercadolivre(termo):
     return list(unicos.values())
 
 
+ENJOEI_API = "https://enjusearch.enjoei.com.br/graphql-search-x"
+ENJOEI_PAGINAS = 5          # 48 anúncios por página
+
+
 def buscar_enjoei(termo):
-    url = "https://www.enjoei.com.br/s?" + urllib.parse.urlencode({"q": termo})
-    html = baixar(url)
-    return extrair_links(
-        html, re.compile(r"(?:https?://www\.)?enjoei\.com\.br/p/[^?#\"'\s<>]*?-(\d{5,})"),
-        base="https://www.enjoei.com.br",
-    )
+    """Usa a mesma busca que o site do Enjoei usa (Brasil inteiro)."""
+    anuncios, depois = [], None
+    for _ in range(ENJOEI_PAGINAS):
+        params = {
+            "first": "48",
+            "operation_name": "searchProducts",
+            "query_id": "c5faa5f85fb47bf0beaa97b67d8a9189",
+            "search_context": "products_search_default",
+            "term": termo,
+        }
+        if depois:
+            params["after"] = depois
+        r = requests.get(ENJOEI_API, params=params, headers=HEADERS, timeout=30)
+        if r.status_code != 200:
+            raise RuntimeError(f"HTTP {r.status_code}")
+        ULTIMA_PAGINA.update({"url_final": r.url, "tamanho": len(r.text),
+                              "titulo": "API do Enjoei"})
+        arestas = r.json()["data"]["search"]["products"]["edges"]
+        for e in arestas:
+            n = e["node"]
+            preco = (n.get("price") or {}).get("current")
+            anuncios.append({
+                "id": str(n["id"]),
+                "titulo": limpar((n.get("title") or {}).get("name")) or "(sem título)",
+                "preco": f"R$ {preco:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+                         if isinstance(preco, (int, float)) else "preço não informado",
+                "link": "https://www.enjoei.com.br/p/" + n["path"],
+            })
+        if len(arestas) < 48:
+            break
+        depois = arestas[-1]["cursor"]
+        time.sleep(random.uniform(0.5, 1.5))
+    return anuncios
 
 
+# OLX e Mercado Livre bloqueiam os servidores do GitHub; ficam desligados
+# aqui. Para ligar (ex.: rodando no celular/PC), apague o "#" da linha.
 SITES = {
-    "OLX": buscar_olx,
-    "Mercado Livre": buscar_mercadolivre,
+    # "OLX": buscar_olx,
+    # "Mercado Livre": buscar_mercadolivre,
     "Enjoei": buscar_enjoei,
 }
 
@@ -236,6 +271,7 @@ def carregar_estado():
     estado.setdefault("iniciados_v2", [])    # "site|termo" já memorizados
     estado.setdefault("falhas", {})       # site -> rodadas seguidas com erro
     estado.setdefault("alertado", [])     # sites com aviso de falha enviado
+    estado.setdefault("corte", {})        # site -> maior ID visto na 1ª leitura
     return estado
 
 
@@ -247,6 +283,11 @@ def salvar_estado(estado):
     }
     with open(ARQUIVO_ESTADO, "w", encoding="utf-8") as f:
         json.dump(estado, f, ensure_ascii=False, indent=1, sort_keys=True)
+
+
+def numero_id(aid):
+    m = re.search(r"\d+", str(aid))
+    return int(m.group(0)) if m else 0
 
 
 def ler_termos():
@@ -283,13 +324,17 @@ def main():
                 time.sleep(random.uniform(1, 3))
                 continue
             primeira_vez = chave_inicio not in estado["iniciados_v2"]
+            maior = max(numero_id(a["id"]) for a in anuncios)
+            if site not in estado["corte"]:
+                estado["corte"][site] = maior
+            corte = estado["corte"][site]
             n_novos = 0
             for a in anuncios:
                 chave = f"{site}|{a['id']}"
                 if chave in estado["vistos"]:
                     continue
-                if primeira_vez:
-                    estado["vistos"][chave] = agora()   # só memoriza
+                if primeira_vez or numero_id(a["id"]) <= corte:
+                    estado["vistos"][chave] = agora()   # antigo: só memoriza
                 elif not any(n["chave"] == chave for n in novos):
                     novos.append({**a, "site": site, "chave": chave})
                     n_novos += 1
