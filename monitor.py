@@ -46,10 +46,19 @@ def agora():
     return datetime.now(FUSO_BR).isoformat(timespec="seconds")
 
 
+ULTIMA_PAGINA = {}
+
+
 def baixar(url):
     r = requests.get(url, headers=HEADERS, timeout=30)
     if r.status_code != 200:
         raise RuntimeError(f"HTTP {r.status_code}")
+    t = re.search(r"<title[^>]*>(.*?)</title>", r.text, re.S | re.I)
+    ULTIMA_PAGINA.update({
+        "url_final": r.url,
+        "tamanho": len(r.text),
+        "titulo": limpar(t.group(1))[:70] if t else "(sem título)",
+    })
     return r.text
 
 
@@ -94,6 +103,15 @@ def extrair_links(html, padrao_id, base=""):
             "preco": achar_preco(a),
             "link": href.split("#")[0],
         }
+    if not anuncios and base:
+        # plano B: procura endereços de anúncio no texto bruto da página
+        for m in padrao_id.finditer(html.replace("\\/", "/")):
+            aid = m.group(1)
+            if aid not in anuncios:
+                trecho = m.group(0)
+                link = trecho if trecho.startswith("http") else base + "/" + trecho.split(".br/", 1)[-1]
+                anuncios[aid] = {"id": aid, "titulo": "(ver anúncio)",
+                                 "preco": "preço não informado", "link": link}
     return list(anuncios.values())
 
 
@@ -158,7 +176,8 @@ def buscar_mercadolivre(termo):
     ):
         html = baixar(pagina_url)
         anuncios += extrair_links(
-            html, re.compile(r"(MLB-?\d{6,})"),
+            html, re.compile(r"(?:https?://)?[a-z.]*mercadolivre\.com\.br/[^\s\"'<>]*?(MLB-?\d{6,})"),
+            base="https://www.mercadolivre.com.br",
         )
         time.sleep(random.uniform(1, 3))
     # normaliza o ID (MLB-123 e MLB123 são o mesmo anúncio)
@@ -173,7 +192,7 @@ def buscar_enjoei(termo):
     url = "https://www.enjoei.com.br/s?" + urllib.parse.urlencode({"q": termo})
     html = baixar(url)
     return extrair_links(
-        html, re.compile(r"enjoei\.com\.br/p/[^?#\"']*?-(\d{5,})"),
+        html, re.compile(r"(?:https?://www\.)?enjoei\.com\.br/p/[^?#\"'\s<>]*?-(\d{5,})"),
         base="https://www.enjoei.com.br",
     )
 
@@ -214,7 +233,7 @@ def carregar_estado():
     except (FileNotFoundError, json.JSONDecodeError):
         estado = {}
     estado.setdefault("vistos", {})       # "site|id" -> data
-    estado.setdefault("iniciados", [])    # "site|termo" já memorizados
+    estado.setdefault("iniciados_v2", [])    # "site|termo" já memorizados
     estado.setdefault("falhas", {})       # site -> rodadas seguidas com erro
     estado.setdefault("alertado", [])     # sites com aviso de falha enviado
     return estado
@@ -256,7 +275,14 @@ def main():
                 continue
 
             total_site += len(anuncios)
-            primeira_vez = chave_inicio not in estado["iniciados"]
+            if not anuncios:
+                d = ULTIMA_PAGINA
+                print(f"  {site:14} | {termo:22} |   0 achados | página: "
+                      f"{d.get('tamanho')} caracteres, título '{d.get('titulo')}', "
+                      f"endereço final {d.get('url_final')}")
+                time.sleep(random.uniform(1, 3))
+                continue
+            primeira_vez = chave_inicio not in estado["iniciados_v2"]
             n_novos = 0
             for a in anuncios:
                 chave = f"{site}|{a['id']}"
@@ -267,8 +293,8 @@ def main():
                 elif not any(n["chave"] == chave for n in novos):
                     novos.append({**a, "site": site, "chave": chave})
                     n_novos += 1
-            if primeira_vez:
-                estado["iniciados"].append(chave_inicio)
+            if primeira_vez and anuncios:
+                estado["iniciados_v2"].append(chave_inicio)
             print(f"  {site:14} | {termo:22} | {len(anuncios):3} achados"
                   f" | {'memorizados (1ª vez)' if primeira_vez else f'{n_novos} novos'}")
             time.sleep(random.uniform(1, 3))
