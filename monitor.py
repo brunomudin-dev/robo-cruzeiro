@@ -230,12 +230,19 @@ def buscar_enjoei(termo):
     return anuncios
 
 
-# OLX e Mercado Livre bloqueiam os servidores do GitHub; ficam desligados
-# aqui. Para ligar (ex.: rodando no celular/PC), apague o "#" da linha.
-SITES = {
-    # "OLX": buscar_olx,
-    # "Mercado Livre": buscar_mercadolivre,
+TODOS_OS_SITES = {
+    "OLX": buscar_olx,
+    "Mercado Livre": buscar_mercadolivre,
     "Enjoei": buscar_enjoei,
+}
+
+# Quais sites ESTE computador/celular consulta. No GitHub fica só o Enjoei
+# (OLX e Mercado Livre bloqueiam servidores). No celular, o instalador
+# define ROBO_SITES="OLX,Mercado Livre".
+_escolha = os.environ.get("ROBO_SITES", "Enjoei")
+SITES = {
+    nome: f for nome, f in TODOS_OS_SITES.items()
+    if nome.lower() in [x.strip().lower() for x in _escolha.split(",")]
 }
 
 
