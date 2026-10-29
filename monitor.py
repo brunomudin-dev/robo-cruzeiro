@@ -1,8 +1,8 @@
 """
 Robô de anúncios do Cruzeiro
 ----------------------------
-Procura anúncios novos na OLX, Mercado Livre e Enjoei e avisa no WhatsApp
-(via CallMeBot). Roda sozinho no GitHub Actions a cada 10 minutos.
+Procura anúncios novos na OLX e no Enjoei e avisa no Telegram
+(ou no WhatsApp via CallMeBot). Roda sozinho no GitHub Actions a cada 10 minutos.
 Só avisa de anúncio criado depois que o robô começou (compara o número do
 anúncio), para não avisar de anúncio antigo que reaparece na busca.
 
@@ -168,28 +168,6 @@ def buscar_olx(termo):
     )
 
 
-def buscar_mercadolivre(termo):
-    slug = urllib.parse.quote(termo.replace(" ", "-"))
-    anuncios = []
-    # O ML não tem "mais recentes"; olhamos as 2 primeiras páginas.
-    for pagina_url in (
-        f"https://lista.mercadolivre.com.br/{slug}",
-        f"https://lista.mercadolivre.com.br/{slug}_Desde_49_NoIndex_True",
-    ):
-        html = baixar(pagina_url)
-        anuncios += extrair_links(
-            html, re.compile(r"(?:https?://)?[a-z.]*mercadolivre\.com\.br/[^\s\"'<>]*?(MLB-?\d{6,})"),
-            base="https://www.mercadolivre.com.br",
-        )
-        time.sleep(random.uniform(1, 3))
-    # normaliza o ID (MLB-123 e MLB123 são o mesmo anúncio)
-    unicos = {}
-    for a in anuncios:
-        a["id"] = a["id"].replace("-", "")
-        unicos.setdefault(a["id"], a)
-    return list(unicos.values())
-
-
 ENJOEI_API = "https://enjusearch.enjoei.com.br/graphql-search-x"
 ENJOEI_PAGINAS = 5          # 48 anúncios por página
 
@@ -232,13 +210,11 @@ def buscar_enjoei(termo):
 
 TODOS_OS_SITES = {
     "OLX": buscar_olx,
-    "Mercado Livre": buscar_mercadolivre,
     "Enjoei": buscar_enjoei,
 }
 
 # Quais sites ESTE computador/celular consulta. No GitHub fica só o Enjoei
-# (OLX e Mercado Livre bloqueiam servidores). No celular, o instalador
-# define ROBO_SITES="OLX,Mercado Livre".
+# (a OLX bloqueia servidores). No celular, ROBO_SITES="OLX".
 _escolha = os.environ.get("ROBO_SITES", "Enjoei")
 SITES = {
     nome: f for nome, f in TODOS_OS_SITES.items()
@@ -246,12 +222,38 @@ SITES = {
 }
 
 
-# ---------------------------------------------------------------- WhatsApp
+# ---------------------------------------------------------------- avisos
+def enviar_telegram(texto, token, chat_id):
+    try:
+        r = requests.post(
+            f"https://api.telegram.org/bot{token}/sendMessage",
+            json={"chat_id": chat_id, "text": texto},
+            timeout=30,
+        )
+        ok = r.status_code == 200 and r.json().get("ok")
+        if not ok:
+            print(f"   [erro Telegram] HTTP {r.status_code} — resposta: "
+                  f"{r.text.replace(token, '***')[:300]}")
+        return bool(ok)
+    except Exception as e:
+        print(f"   [erro Telegram] {str(e).replace(token, '***')}")
+        return False
+
+
 def enviar_whatsapp(texto):
+    """Envia o aviso. Usa o Telegram se estiver configurado; senão, CallMeBot."""
+    token = os.environ.get("TELEGRAM_TOKEN", "").strip()
+    chat_id = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
+    if token and chat_id:
+        return enviar_telegram(texto, token, chat_id)
+    return enviar_callmebot(texto)
+
+
+def enviar_callmebot(texto):
     fone = os.environ.get("CALLMEBOT_PHONE", "").strip()
     chave = os.environ.get("CALLMEBOT_APIKEY", "").strip()
     if not fone or not chave:
-        print("   [aviso] segredos do CallMeBot não configurados; mensagem não enviada")
+        print("   [aviso] nenhum aviso configurado (Telegram/CallMeBot); mensagem não enviada")
         return False
     url = "https://api.callmebot.com/whatsapp.php?" + urllib.parse.urlencode(
         {"phone": fone, "text": texto, "apikey": chave}
