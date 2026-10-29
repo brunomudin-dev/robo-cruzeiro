@@ -258,9 +258,11 @@ def enviar_whatsapp(texto):
     )
     try:
         r = requests.get(url, timeout=30)
-        ok = r.status_code == 200
+        resposta = BeautifulSoup(r.text, "html.parser").get_text(" ", strip=True)
+        resposta = resposta.replace(chave, "***").replace(fone, "***")[:300]
+        ok = r.status_code == 200 and "error" not in resposta.lower()
         if not ok:
-            print(f"   [erro CallMeBot] HTTP {r.status_code}")
+            print(f"   [erro CallMeBot] HTTP {r.status_code} — resposta: {resposta}")
         return ok
     except Exception as e:
         print(f"   [erro CallMeBot] {e}")
