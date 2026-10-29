@@ -1,0 +1,20 @@
+name: Teste WhatsApp
+
+on:
+  workflow_dispatch:   # só roda quando você clicar em "Run workflow"
+
+jobs:
+  teste:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install requests beautifulsoup4
+      - name: Enviar mensagem de teste
+        env:
+          CALLMEBOT_PHONE: ${{ secrets.CALLMEBOT_PHONE }}
+          CALLMEBOT_APIKEY: ${{ secrets.CALLMEBOT_APIKEY }}
+        run: |
+          python -c "import monitor, sys; ok = monitor.enviar_whatsapp('✅ Teste do Robô Cruzeiro - GitHub'); print('ENVIOU' if ok else 'FALHOU'); sys.exit(0 if ok else 1)"
