@@ -149,12 +149,13 @@ def buscar_olx(termo):
             itens = procurar_dicts(dados, ("subject", "url"))
             anuncios = []
             for it in itens:
-                aid = str(it.get("listId") or it.get("id") or it["url"])
+                m_id = re.search(r"-(\d{8,})(?:[/?#]|$)", str(it["url"]))
+                aid = m_id.group(1) if m_id else str(it.get("listId") or it["url"])
                 anuncios.append({
                     "id": aid,
                     "titulo": limpar(it.get("subject")),
                     "preco": limpar(str(it.get("price") or "preço não informado")),
-                    "link": it["url"],
+                    "link": str(it["url"]).split("?")[0],
                 })
             if anuncios:
                 return anuncios
@@ -309,6 +310,25 @@ def ler_termos():
 
 # ---------------------------------------------------------------- principal
 def main():
+    # trava: se a rodada anterior ainda está rodando, esta não começa
+    trava = ARQUIVO_ESTADO + ".lock"
+    try:
+        if time.time() - os.path.getmtime(trava) < 15 * 60:
+            print(f"{agora()} — rodada anterior ainda em andamento; pulando")
+            return
+    except FileNotFoundError:
+        pass
+    open(trava, "w").close()
+    try:
+        rodada()
+    finally:
+        try:
+            os.remove(trava)
+        except FileNotFoundError:
+            pass
+
+
+def rodada():
     estado = carregar_estado()
     termos = ler_termos()
     novos = []
@@ -379,6 +399,7 @@ def main():
         if enviar_whatsapp(texto):
             estado["vistos"][a["chave"]] = agora()
             enviados += 1
+            salvar_estado(estado)   # grava na hora: se a rodada cair, não repete
         time.sleep(PAUSA_ENTRE_MENSAGENS)
 
     salvar_estado(estado)
