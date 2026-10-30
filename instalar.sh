@@ -14,23 +14,23 @@ echo ""
 echo "=== Robô Cruzeiro — instalação no celular ==="
 echo ""
 echo "1/5 Instalando programas (pode demorar alguns minutos)..."
-yes | pkg update -y >/dev/null 2>&1 || true
+yes | pkg upgrade -y >/dev/null 2>&1 || true
 pkg install -y python cronie termux-services curl >/dev/null
 pip install --quiet requests beautifulsoup4
 
-echo "2/5 Seus dados do CallMeBot (ficam só neste celular)"
-read -r -p "   Número do WhatsApp (ex.: +5531999999999): " FONE
-read -r -p "   Apikey do CallMeBot: " CHAVE
+echo "2/5 Canal de avisos do app ntfy"
+read -r -p "   Nome do canal (ex.: cruzeiro-bruno-8e563c50): " TOPICO
 
 echo "3/5 Criando a pasta do robô..."
 mkdir -p "$HOME/robo"
 cat > "$HOME/robo/rodar.sh" <<EOF
 #!/data/data/com.termux/files/usr/bin/bash
 # Roda o robô uma vez. O Agendador (cron) chama este arquivo a cada 10 min.
+export HOME=/data/data/com.termux/files/home
+export PATH=/data/data/com.termux/files/usr/bin:\$PATH
 cd "\$HOME/robo"
-export CALLMEBOT_PHONE='$FONE'
-export CALLMEBOT_APIKEY='$CHAVE'
-export ROBO_SITES='OLX,Mercado Livre'
+export NTFY_TOPIC='$TOPICO'
+export ROBO_SITES='OLX'
 BASE="https://raw.githubusercontent.com/$USUARIO_GITHUB/robo-cruzeiro/main"
 # baixa a versão mais nova do script e dos termos (se falhar, usa a anterior)
 for ARQ in monitor.py termos.txt; do
@@ -43,7 +43,7 @@ EOF
 chmod +x "$HOME/robo/rodar.sh"
 
 echo "4/5 Agendando para rodar a cada 10 minutos..."
-( crontab -l 2>/dev/null | grep -v 'robo/rodar.sh' ; echo "*/10 * * * * \$HOME/robo/rodar.sh" ) | crontab -
+( crontab -l 2>/dev/null | grep -v 'robo/rodar.sh' ; echo "*/10 * * * * /data/data/com.termux/files/home/robo/rodar.sh >> /data/data/com.termux/files/home/robo/cron.txt 2>&1" ) | crontab -
 mkdir -p "$HOME/.termux/boot"
 cat > "$HOME/.termux/boot/iniciar-robo.sh" <<'EOF'
 #!/data/data/com.termux/files/usr/bin/bash
