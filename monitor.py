@@ -52,6 +52,12 @@ HEADERS = {
 PRECO_RE = re.compile(r"R\$\s?[\d\.]+(?:,\d{2})?")
 
 
+# O CallMeBot aceita no máximo 16 mensagens a cada 4 horas por número.
+# Cada aparelho (GitHub / celular) usa no máximo esta cota, e vários anúncios
+# novos vão juntos numa mensagem só.
+LIMITE_MENSAGENS_4H = int(os.environ.get("ROBO_LIMITE_4H", "7"))
+ANUNCIOS_POR_MENSAGEM = 6
+
 # ---------------------------------------------------------------- utilidades
 def agora():
     return datetime.now(FUSO_BR).isoformat(timespec="seconds")
@@ -292,8 +298,10 @@ def _callmebot_um(texto, fone, chave, n):
         r = requests.get(url, timeout=30)
         resposta = BeautifulSoup(r.text, "html.parser").get_text(" ", strip=True)
         resposta = resposta.replace(chave, "***").replace(fone, "***")[:300]
-        ok = r.status_code == 200 and "error" not in resposta.lower() \
-            and "invalid" not in resposta.lower()
+        baixo = resposta.lower()
+        # 200 = enviado; 210 = colocado na fila do CallMeBot (vai ser entregue)
+        ok = (r.status_code in (200, 210) or "added into the queue" in baixo) \
+            and "invalid" not in baixo and "error" not in baixo
         if not ok:
             print(f"   [erro CallMeBot, número {n}] HTTP {r.status_code} — resposta: {resposta}")
         return ok
@@ -360,6 +368,11 @@ def main():
 
 def rodada():
     estado = carregar_estado()
+    if not estado.get("correcao_fila_210"):
+        # Antes, a resposta "na fila" do CallMeBot era tratada como erro e o robô
+        # reenviava os mesmos anúncios. Esta rodada só memoriza, sem avisar.
+        estado["iniciados_v2"] = []
+        estado["correcao_fila_210"] = True
     termos = ler_termos()
     novos = []
     print(f"Início {agora()} — {len(termos)} termos, {len(SITES)} sites")
@@ -440,7 +453,8 @@ def rodada():
             estado["falhas"][site] = estado["falhas"].get(site, 0) + 1
         else:
             if site in estado["alertado"]:
-                enviar_whatsapp(f"✅ Robô Cruzeiro: {site} voltou a funcionar.")
+                if enviar_whatsapp(f"✅ Robô Cruzeiro: {site} voltou a funcionar."):
+                    estado.setdefault("envios", []).append(time.time())
                 estado["alertado"].remove(site)
             estado["falhas"][site] = 0
 
@@ -451,16 +465,35 @@ def rodada():
                 f"há cerca de 1 hora. Os outros sites seguem normais."
             ):
                 estado["alertado"].append(site)
+                estado.setdefault("envios", []).append(time.time())
 
-    # envia os novos (um por mensagem)
+    # envia os novos — vários numa mensagem só, respeitando o limite do CallMeBot
     enviados = 0
-    for a in novos[:MAX_MENSAGENS_POR_RODADA]:
-        texto = f"🦊 {a['site']}\n{a['titulo']}\n{a['preco']}\n{a['link']}"
+    agora_ts = time.time()
+    estado["envios"] = [t for t in estado.get("envios", []) if agora_ts - t < 4 * 3600]
+    while novos:
+        if len(estado["envios"]) >= LIMITE_MENSAGENS_4H:
+            print(f"  limite de {LIMITE_MENSAGENS_4H} mensagens/4h atingido — "
+                  f"{len(novos)} anúncio(s) ficam para a próxima rodada")
+            break
+        lote, novos = novos[:ANUNCIOS_POR_MENSAGEM], novos[ANUNCIOS_POR_MENSAGEM:]
+        if len(lote) == 1:
+            a = lote[0]
+            texto = f"🦊 {a['site']}\n{a['titulo']}\n{a['preco']}\n{a['link']}"
+        else:
+            partes = [f"🦊 {len(lote)} anúncios novos"]
+            for a in lote:
+                partes.append(f"\n• {a['site']} | {a['titulo']} | {a['preco']}\n{a['link']}")
+            texto = "\n".join(partes)
         if enviar_whatsapp(texto):
-            estado["vistos"][a["chave"]] = agora()
-            enviados += 1
+            for a in lote:
+                estado["vistos"][a["chave"]] = agora()
+            enviados += len(lote)
+            estado["envios"].append(time.time())
             salvar_estado(estado)   # grava na hora: se a rodada cair, não repete
-        time.sleep(PAUSA_ENTRE_MENSAGENS)
+            time.sleep(PAUSA_ENTRE_MENSAGENS)
+        else:
+            break
 
     salvar_estado(estado)
     print(f"Fim {agora()} — {len(novos)} novos, {enviados} enviados")
