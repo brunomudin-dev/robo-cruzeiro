@@ -25,7 +25,7 @@ from bs4 import BeautifulSoup
 ARQUIVO_TERMOS = "termos.txt"
 ARQUIVO_ESTADO = "vistos.json"
 MAX_MENSAGENS_POR_RODADA = 30      # o resto vai na próxima rodada
-PAUSA_ENTRE_MENSAGENS = 4          # segundos (o CallMeBot não gosta de rajada)
+PAUSA_ENTRE_MENSAGENS = 2          # segundos entre mensagens
 FALHAS_PARA_ALERTAR = 6            # 6 rodadas seguidas (~1h) com erro -> avisa
 
 # A OLX bloqueia (HTTP 403) quem busca demais. Por isso, a cada rodada ela
@@ -256,8 +256,31 @@ def enviar_telegram(texto, token, chat_id):
         return False
 
 
-def enviar_whatsapp(texto):
-    """Envia o aviso. Usa o Telegram se estiver configurado; senão, CallMeBot."""
+def enviar_ntfy(texto, topico, link=None):
+    """Notificação pelo app ntfy (grátis, sem conta, chega na hora)."""
+    headers = {"Title": "Robo Cruzeiro", "Tags": "soccer", "Priority": "high"}
+    if link:
+        headers["Click"] = link          # tocar na notificação abre o anúncio
+    try:
+        r = requests.post(f"https://ntfy.sh/{topico}", data=texto.encode("utf-8"),
+                          headers=headers, timeout=30)
+        if r.status_code != 200:
+            print(f"   [erro ntfy] HTTP {r.status_code} — resposta: {r.text[:300]}")
+        return r.status_code == 200
+    except Exception as e:
+        print(f"   [erro ntfy] {e}")
+        return False
+
+
+def usando_ntfy():
+    return bool(os.environ.get("NTFY_TOPIC", "").strip())
+
+
+def enviar_whatsapp(texto, link=None):
+    """Envia o aviso: ntfy se configurado; senão Telegram; senão CallMeBot."""
+    topico = os.environ.get("NTFY_TOPIC", "").strip()
+    if topico:
+        return enviar_ntfy(texto, topico, link)
     token = os.environ.get("TELEGRAM_TOKEN", "").strip()
     chat_id = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
     if token and chat_id:
@@ -471,21 +494,25 @@ def rodada():
     enviados = 0
     agora_ts = time.time()
     estado["envios"] = [t for t in estado.get("envios", []) if agora_ts - t < 4 * 3600]
+    limite_4h = 200 if usando_ntfy() else LIMITE_MENSAGENS_4H
     while novos:
-        if len(estado["envios"]) >= LIMITE_MENSAGENS_4H:
-            print(f"  limite de {LIMITE_MENSAGENS_4H} mensagens/4h atingido — "
+        if len(estado["envios"]) >= limite_4h:
+            print(f"  limite de {limite_4h} mensagens/4h atingido — "
                   f"{len(novos)} anúncio(s) ficam para a próxima rodada")
             break
-        lote, novos = novos[:ANUNCIOS_POR_MENSAGEM], novos[ANUNCIOS_POR_MENSAGEM:]
+        por_msg = 1 if usando_ntfy() else ANUNCIOS_POR_MENSAGEM
+        lote, novos = novos[:por_msg], novos[por_msg:]
+        link_toque = None
         if len(lote) == 1:
             a = lote[0]
+            link_toque = a["link"]
             texto = f"🦊 {a['site']}\n{a['titulo']}\n{a['preco']}\n{a['link']}"
         else:
             partes = [f"🦊 {len(lote)} anúncios novos"]
             for a in lote:
                 partes.append(f"\n• {a['site']} | {a['titulo']} | {a['preco']}\n{a['link']}")
             texto = "\n".join(partes)
-        if enviar_whatsapp(texto):
+        if enviar_whatsapp(texto, link_toque):
             for a in lote:
                 estado["vistos"][a["chave"]] = agora()
             enviados += len(lote)
