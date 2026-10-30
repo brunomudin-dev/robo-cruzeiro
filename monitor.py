@@ -31,6 +31,7 @@ FALHAS_PARA_ALERTAR = 6            # 6 rodadas seguidas (~1h) com erro -> avisa
 # A OLX bloqueia (HTTP 403) quem busca demais. Por isso, a cada rodada ela
 # consulta só uma parte dos termos, em rodízio, com pausas maiores; e, se
 # começar a bloquear, o robô dá um tempo antes de tentar de novo.
+SITES_COM_CORTE = {"Enjoei"}
 TERMOS_POR_RODADA = {"OLX": 6}     # quantos termos a OLX busca por rodada
 TERMOS_SEMPRE = ["camisa cruzeiro"]  # buscados em TODA rodada (fora do rodízio)
 PAUSA_ENTRE_BUSCAS = {"OLX": (6, 12)}   # segundos entre uma busca e outra
@@ -454,7 +455,10 @@ def rodada():
             maior = max(numero_id(a["id"]) for a in anuncios)
             if site not in estado["corte"]:
                 estado["corte"][site] = maior
-            corte = estado["corte"][site]
+            # Corte por número só no Enjoei (lá anúncios antigos "sobem" na lista
+            # por relevância). Na OLX, anúncio antigo que reaparece é anúncio
+            # republicado/renovado pelo vendedor: avisa na 1ª vez que o robô vê.
+            corte = estado["corte"][site] if site in SITES_COM_CORTE else 0
             n_novos = 0
             for a in anuncios:
                 chave = f"{site}|{a['id']}"
