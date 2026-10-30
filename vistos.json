@@ -1,8 +1,10 @@
 {
  "alertado": [],
+ "correcao_fila_210": true,
  "corte": {
   "Enjoei": 153717437
  },
+ "envios": [],
  "falhas": {
   "Enjoei": 0,
   "Mercado Livre": 2,
@@ -51,17 +53,7 @@
   "Enjoei|casaco cruzeiro",
   "Enjoei|moletom cruzeiro",
   "Enjoei|parka cruzeiro",
-  "Enjoei|uniforme cruzeiro",
-  "Enjoei|cruzeiro topper",
-  "Enjoei|cruzeiro finta",
-  "Enjoei|cruzeiro rhumell",
-  "Enjoei|cruzeiro reebok",
-  "Enjoei|manto cruzeiro",
   "Enjoei|agasalho cruzeiro",
-  "Enjoei|cruzeiro puma",
-  "Enjoei|cruzeiro olympikus",
-  "Enjoei|cruzeiro umbro",
-  "Enjoei|cruzeiro adidas",
   "Enjoei|camisas cruzeiro"
  ],
  "pausa_ate": {},
