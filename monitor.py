@@ -27,6 +27,15 @@ ARQUIVO_ESTADO = "vistos.json"
 MAX_MENSAGENS_POR_RODADA = 30      # o resto vai na próxima rodada
 PAUSA_ENTRE_MENSAGENS = 4          # segundos (o CallMeBot não gosta de rajada)
 FALHAS_PARA_ALERTAR = 6            # 6 rodadas seguidas (~1h) com erro -> avisa
+
+# A OLX bloqueia (HTTP 403) quem busca demais. Por isso, a cada rodada ela
+# consulta só uma parte dos termos, em rodízio, com pausas maiores; e, se
+# começar a bloquear, o robô dá um tempo antes de tentar de novo.
+TERMOS_POR_RODADA = {"OLX": 6}     # quantos termos a OLX busca por rodada
+TERMOS_SEMPRE = ["camisa cruzeiro"]  # buscados em TODA rodada (fora do rodízio)
+PAUSA_ENTRE_BUSCAS = {"OLX": (6, 12)}   # segundos entre uma busca e outra
+BLOQUEIOS_PARA_PARAR = 2           # 403 seguidos -> encerra a OLX na rodada
+DESCANSO_APOS_BLOQUEIO = 30 * 60   # segundos sem tentar a OLX após bloqueio
 DIAS_PARA_ESQUECER = 120           # limpa anúncios antigos do arquivo de vistos
 
 FUSO_BR = timezone(timedelta(hours=-3))
@@ -251,11 +260,31 @@ def enviar_whatsapp(texto):
 
 
 def enviar_callmebot(texto):
-    fone = os.environ.get("CALLMEBOT_PHONE", "").strip()
-    chave = os.environ.get("CALLMEBOT_APIKEY", "").strip()
-    if not fone or not chave:
+    """
+    Envia para um ou mais números. Para vários, separe por vírgula, na mesma
+    ordem, o número e a apikey de cada um:
+      CALLMEBOT_PHONE  = +553199999999,+553188888888
+      CALLMEBOT_APIKEY = 123456,654321
+    Conta como enviado se chegou para pelo menos um.
+    """
+    fones = [x.strip() for x in os.environ.get("CALLMEBOT_PHONE", "").split(",") if x.strip()]
+    chaves = [x.strip() for x in os.environ.get("CALLMEBOT_APIKEY", "").split(",") if x.strip()]
+    if not fones or not chaves:
         print("   [aviso] nenhum aviso configurado (Telegram/CallMeBot); mensagem não enviada")
         return False
+    if len(fones) != len(chaves):
+        print(f"   [aviso] {len(fones)} números e {len(chaves)} apikeys — "
+              "precisa ter a mesma quantidade, na mesma ordem")
+    algum_ok = False
+    for i, (fone, chave) in enumerate(zip(fones, chaves), start=1):
+        if i > 1:
+            time.sleep(2)
+        if _callmebot_um(texto, fone, chave, i):
+            algum_ok = True
+    return algum_ok
+
+
+def _callmebot_um(texto, fone, chave, n):
     url = "https://api.callmebot.com/whatsapp.php?" + urllib.parse.urlencode(
         {"phone": fone, "text": texto, "apikey": chave}
     )
@@ -263,12 +292,13 @@ def enviar_callmebot(texto):
         r = requests.get(url, timeout=30)
         resposta = BeautifulSoup(r.text, "html.parser").get_text(" ", strip=True)
         resposta = resposta.replace(chave, "***").replace(fone, "***")[:300]
-        ok = r.status_code == 200 and "error" not in resposta.lower()
+        ok = r.status_code == 200 and "error" not in resposta.lower() \
+            and "invalid" not in resposta.lower()
         if not ok:
-            print(f"   [erro CallMeBot] HTTP {r.status_code} — resposta: {resposta}")
+            print(f"   [erro CallMeBot, número {n}] HTTP {r.status_code} — resposta: {resposta}")
         return ok
     except Exception as e:
-        print(f"   [erro CallMeBot] {e}")
+        print(f"   [erro CallMeBot, número {n}] {str(e).replace(chave, '***')}")
         return False
 
 
@@ -336,14 +366,44 @@ def rodada():
 
     for site, funcao in SITES.items():
         erros_site, total_site = 0, 0
-        for termo in termos:
+        pausa = estado.setdefault("pausa_ate", {}).get(site, 0)
+        if time.time() < pausa:
+            print(f"  {site:14} | descansando após bloqueio até "
+                  f"{datetime.fromtimestamp(pausa, FUSO_BR):%H:%M}")
+            continue
+
+        termos_site = termos
+        limite = TERMOS_POR_RODADA.get(site)
+        if limite and limite < len(termos):
+            sempre = [t for t in termos if t.lower() in [x.lower() for x in TERMOS_SEMPRE]]
+            outros = [t for t in termos if t not in sempre]
+            vagas = max(limite - len(sempre), 0)
+            escolhidos = []
+            if outros and vagas:
+                pos = estado.setdefault("rodizio", {}).get(site, 0) % len(outros)
+                escolhidos = (outros[pos:] + outros[:pos])[:vagas]
+                estado["rodizio"][site] = (pos + vagas) % len(outros)
+            termos_site = sempre + escolhidos
+        intervalo = PAUSA_ENTRE_BUSCAS.get(site, (1, 3))
+
+        bloqueios_seguidos, bloqueado = 0, False
+        for termo in termos_site:
             chave_inicio = f"{site}|{termo}"
             try:
                 anuncios = funcao(termo)
+                bloqueios_seguidos = 0
             except Exception as e:
                 erros_site += 1
                 print(f"  {site:14} | {termo:22} | ERRO: {e}")
-                time.sleep(random.uniform(1, 3))
+                if "403" in str(e):
+                    bloqueios_seguidos += 1
+                    if bloqueios_seguidos >= BLOQUEIOS_PARA_PARAR:
+                        estado["pausa_ate"][site] = time.time() + DESCANSO_APOS_BLOQUEIO
+                        print(f"  {site:14} | bloqueando — pausa de "
+                              f"{DESCANSO_APOS_BLOQUEIO // 60} min")
+                        bloqueado = True
+                        break
+                time.sleep(random.uniform(*intervalo))
                 continue
 
             total_site += len(anuncios)
@@ -352,7 +412,7 @@ def rodada():
                 print(f"  {site:14} | {termo:22} |   0 achados | página: "
                       f"{d.get('tamanho')} caracteres, título '{d.get('titulo')}', "
                       f"endereço final {d.get('url_final')}")
-                time.sleep(random.uniform(1, 3))
+                time.sleep(random.uniform(*intervalo))
                 continue
             primeira_vez = chave_inicio not in estado["iniciados_v2"]
             maior = max(numero_id(a["id"]) for a in anuncios)
@@ -373,7 +433,7 @@ def rodada():
                 estado["iniciados_v2"].append(chave_inicio)
             print(f"  {site:14} | {termo:22} | {len(anuncios):3} achados"
                   f" | {'memorizados (1ª vez)' if primeira_vez else f'{n_novos} novos'}")
-            time.sleep(random.uniform(1, 3))
+            time.sleep(random.uniform(*intervalo))
 
         # controle de falhas: o site falhou em TODOS os termos?
         if total_site == 0:
