@@ -1,4 +1,4 @@
-name: Teste WhatsApp
+name: Teste Aviso
 
 on:
   workflow_dispatch:   # só roda quando você clicar em "Run workflow"
@@ -16,5 +16,8 @@ jobs:
         env:
           CALLMEBOT_PHONE: ${{ secrets.CALLMEBOT_PHONE }}
           CALLMEBOT_APIKEY: ${{ secrets.CALLMEBOT_APIKEY }}
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
           python -c "import monitor, sys; ok = monitor.enviar_whatsapp('✅ Teste do Robô Cruzeiro - GitHub'); print('ENVIOU' if ok else 'FALHOU'); sys.exit(0 if ok else 1)"
