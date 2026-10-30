@@ -5,14 +5,5 @@ jaqueta cruzeiro
 casaco cruzeiro
 moletom cruzeiro
 parka cruzeiro
-uniforme cruzeiro
-cruzeiro topper
-cruzeiro finta
-cruzeiro rhumell
-cruzeiro reebok
-manto cruzeiro
 agasalho cruzeiro
-cruzeiro puma
-cruzeiro olympikus
-cruzeiro umbro
-cruzeiro adidas
+
