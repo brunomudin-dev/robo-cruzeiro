@@ -32,11 +32,15 @@ FALHAS_PARA_ALERTAR = 6            # 6 rodadas seguidas (~1h) com erro -> avisa
 # consulta só uma parte dos termos, em rodízio, com pausas maiores; e, se
 # começar a bloquear, o robô dá um tempo antes de tentar de novo.
 SITES_COM_CORTE = {"Enjoei"}
-TERMOS_POR_RODADA = {"OLX": 6}     # quantos termos a OLX busca por rodada
+TERMOS_POR_RODADA = {"OLX": 2}     # "camisa cruzeiro" + 1 termo do rodízio
 TERMOS_SEMPRE = ["camisa cruzeiro"]  # buscados em TODA rodada (fora do rodízio)
-PAUSA_ENTRE_BUSCAS = {"OLX": (6, 12)}   # segundos entre uma busca e outra
-BLOQUEIOS_PARA_PARAR = 2           # 403 seguidos -> encerra a OLX na rodada
-DESCANSO_APOS_BLOQUEIO = 30 * 60   # segundos sem tentar a OLX após bloqueio
+PAUSA_ENTRE_BUSCAS = {"OLX": (20, 45)}  # segundos entre uma busca e outra
+# Intervalo aleatório entre rodadas da OLX (minutos), como uma pessoa olhando
+INTERVALO_RODADAS = {"OLX": (15, 30)}
+ESPERA_INICIAL = {"OLX": (0, 90)}  # segundos aleatórios antes de começar
+BLOQUEIOS_PARA_PARAR = 1           # no 1º bloqueio, para a OLX na hora
+# Descanso após bloqueio cresce se continuar bloqueando: 1h, 2h, 4h, 6h...
+DESCANSOS_APOS_BLOQUEIO = [60, 120, 240, 360]   # minutos
 DIAS_PARA_ESQUECER = 120           # limpa anúncios antigos do arquivo de vistos
 
 FUSO_BR = timezone(timedelta(hours=-3))
@@ -44,11 +48,36 @@ FUSO_BR = timezone(timedelta(hours=-3))
 HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-        "(KHTML, like Gecko) Chrome/130.0 Safari/537.36"
+        "(KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36"
     ),
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    "Accept-Language": "pt-BR,pt;q=0.9,en;q=0.8",
+    "Accept": ("text/html,application/xhtml+xml,application/xml;q=0.9,"
+               "image/avif,image/webp,*/*;q=0.8"),
+    "Accept-Language": "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7",
+    "Accept-Encoding": "gzip, deflate",
+    "Referer": "https://www.olx.com.br/",
+    "Upgrade-Insecure-Requests": "1",
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "same-origin",
+    "Sec-Fetch-User": "?1",
 }
+
+ARQUIVO_COOKIES = "cookies.json"
+SESSAO = requests.Session()
+SESSAO.headers.update(HEADERS)
+try:
+    with open(ARQUIVO_COOKIES, encoding="utf-8") as _f:
+        SESSAO.cookies.update(json.load(_f))
+except Exception:
+    pass
+
+
+def salvar_cookies():
+    try:
+        with open(ARQUIVO_COOKIES, "w", encoding="utf-8") as f:
+            json.dump(requests.utils.dict_from_cookiejar(SESSAO.cookies), f)
+    except Exception:
+        pass
 
 PRECO_RE = re.compile(r"R\$\s?[\d\.]+(?:,\d{2})?")
 
@@ -68,7 +97,8 @@ ULTIMA_PAGINA = {}
 
 
 def baixar(url):
-    r = requests.get(url, headers=HEADERS, timeout=30)
+    r = SESSAO.get(url, timeout=30)
+    salvar_cookies()
     if r.status_code != 200:
         raise RuntimeError(f"HTTP {r.status_code}")
     t = re.search(r"<title[^>]*>(.*?)</title>", r.text, re.S | re.I)
@@ -408,6 +438,17 @@ def rodada():
             print(f"  {site:14} | descansando após bloqueio até "
                   f"{datetime.fromtimestamp(pausa, FUSO_BR):%H:%M}")
             continue
+        proxima = estado.setdefault("proxima_rodada", {}).get(site, 0)
+        if time.time() < proxima:
+            print(f"  {site:14} | próxima busca às "
+                  f"{datetime.fromtimestamp(proxima, FUSO_BR):%H:%M}")
+            continue
+        if site in INTERVALO_RODADAS:
+            a_min, b_min = INTERVALO_RODADAS[site]
+            # -2 min de folga: o agendador do celular roda de 10 em 10
+            estado["proxima_rodada"][site] = time.time() + random.uniform(a_min, b_min) * 60 - 120
+        if site in ESPERA_INICIAL:
+            time.sleep(random.uniform(*ESPERA_INICIAL[site]))
 
         termos_site = termos
         limite = TERMOS_POR_RODADA.get(site)
@@ -429,15 +470,18 @@ def rodada():
             try:
                 anuncios = funcao(termo)
                 bloqueios_seguidos = 0
+                estado.setdefault("nivel_bloqueio", {})[site] = 0   # liberou: zera
             except Exception as e:
                 erros_site += 1
                 print(f"  {site:14} | {termo:22} | ERRO: {e}")
                 if "403" in str(e):
                     bloqueios_seguidos += 1
                     if bloqueios_seguidos >= BLOQUEIOS_PARA_PARAR:
-                        estado["pausa_ate"][site] = time.time() + DESCANSO_APOS_BLOQUEIO
-                        print(f"  {site:14} | bloqueando — pausa de "
-                              f"{DESCANSO_APOS_BLOQUEIO // 60} min")
+                        nivel = estado.setdefault("nivel_bloqueio", {}).get(site, 0)
+                        minutos = DESCANSOS_APOS_BLOQUEIO[min(nivel, len(DESCANSOS_APOS_BLOQUEIO) - 1)]
+                        estado["nivel_bloqueio"][site] = nivel + 1
+                        estado["pausa_ate"][site] = time.time() + minutos * 60
+                        print(f"  {site:14} | bloqueando — pausa de {minutos} min")
                         bloqueado = True
                         break
                 time.sleep(random.uniform(*intervalo))
