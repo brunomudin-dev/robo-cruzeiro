@@ -364,6 +364,36 @@ def _callmebot_um(texto, fone, chave, n):
         return False
 
 
+# ---------------------------------------------------------------- pulso
+# O celular velho (que busca a OLX) manda um "sinal de vida" silencioso a cada
+# rodada. O GitHub confere esse sinal; se sumir por 3h, avisa que o celular parou.
+HORAS_SEM_PULSO = 3
+
+
+def verificar_pulso(estado):
+    topico = os.environ.get("NTFY_TOPIC", "").strip()
+    if not topico:
+        return
+    canal = f"https://ntfy.sh/{topico}-pulso"
+    try:
+        if "OLX" in SITES:                       # celular: manda o sinal
+            requests.post(canal, data=agora().encode(), timeout=20)
+        elif "Enjoei" in SITES:                  # GitHub: confere o sinal
+            r = requests.get(f"{canal}/json?poll=1&since={HORAS_SEM_PULSO}h", timeout=20)
+            tem_pulso = r.status_code == 200 and r.text.strip() != ""
+            ultimo = estado.get("alerta_pulso", 0)
+            if r.status_code == 200 and not tem_pulso and time.time() - ultimo > 12 * 3600:
+                if enviar_whatsapp(
+                    f"⚠️ Robô Cruzeiro: o celular velho (busca da OLX) não dá sinal "
+                    f"há mais de {HORAS_SEM_PULSO}h. Abra o Termux e rode: crond"
+                ):
+                    estado["alerta_pulso"] = time.time()
+            elif tem_pulso:
+                estado["alerta_pulso"] = 0
+    except Exception as e:
+        print(f"   [pulso] {e}")
+
+
 # ---------------------------------------------------------------- estado
 def carregar_estado():
     try:
@@ -570,6 +600,7 @@ def rodada():
         else:
             break
 
+    verificar_pulso(estado)
     salvar_estado(estado)
     print(f"Fim {agora()} — {len(novos)} novos, {enviados} enviados")
 
